@@ -1,0 +1,154 @@
+import re
+import string
+import time
+import numpy as np
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import PCA
+from sklearn.linear_model import Ridge, Lasso
+from sklearn.model_selection import train_test_split, RandomizedSearchCV, cross_val_score
+from sklearn.metrics import r2_score
+from sklearn.preprocessing import StandardScaler
+
+file_path = 'shakespeare.txt'
+
+def load_text(file_path):
+    with open(file_path, 'r', encoding='utf-8') as file:
+        return file.read()
+
+start_time = time.time()
+shakespeare_text = load_text(file_path)
+load_time = time.time() - start_time
+print(f"Loading text took {load_time:.4f} seconds")
+
+def clean_text(text):
+    text = re.sub(r'\r\n', '\n', text)
+    text = re.sub(r'\r', '\n', text)
+    text = re.sub(r'^\d+\n', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\s+', ' ', text)
+    text = text.lower()
+    text = re.sub(f"[{string.punctuation}]", "", text)
+    return text
+
+start_time = time.time()
+cleaned_text = clean_text(shakespeare_text)
+cleaning_time = time.time() - start_time
+print(f"Cleaning text took {cleaning_time:.4f} seconds")
+
+def split_chunks(text, chunk_size=100):
+    chunks = re.split(r'\n{2,}', text)
+    if len(chunks) == 1:
+        words = text.split()
+        chunks = [' '.join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+    return chunks
+
+start_time = time.time()
+chunks = split_chunks(cleaned_text)
+split_time = time.time() - start_time
+print(f"Splitting text into chunks took {split_time:.4f} seconds. Total chunks: {len(chunks)}")
+
+def vectorize_text(chunks):
+    vectorizer = TfidfVectorizer(max_features=1000, ngram_range=(1, 2), stop_words='english')
+    X_tfidf = vectorizer.fit_transform(chunks)
+    return X_tfidf
+
+start_time = time.time()
+X_tfidf = vectorize_text(chunks)
+vectorization_time = time.time() - start_time
+print(f"TF-IDF vectorization took {vectorization_time:.4f} seconds. Features shape: {X_tfidf.shape}")
+
+def create_additional_features(chunks):
+    word_count = [len(chunk.split()) for chunk in chunks]
+    text_length = [len(chunk) for chunk in chunks]
+    avg_word_length = [np.mean([len(word) for word in chunk.split()]) for chunk in chunks]
+    avg_sentence_length = [len(chunk.split('.')) for chunk in chunks]
+    
+    features = {
+        'word_count': word_count,
+        'text_length': text_length,
+        'avg_word_length': avg_word_length,
+        'avg_sentence_length': avg_sentence_length
+    }
+    return pd.DataFrame(features)
+
+start_time = time.time()
+df_features = create_additional_features(chunks)
+feature_calculation_time = time.time() - start_time
+print(f"Feature calculation took {feature_calculation_time:.4f} seconds")
+
+X = np.hstack([X_tfidf.toarray(), df_features.values])
+print(f"Final feature matrix shape: {X.shape}")
+
+y = np.array(df_features['text_length'])
+
+def split_train_test(X, y):
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    return X_train, X_test, y_train, y_test
+
+X_train, X_test, y_train, y_test = split_train_test(X, y)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+print("Performing PCA for dimensionality reduction...")
+pca = PCA(n_components=0.95)
+X_train_pca = pca.fit_transform(X_train_scaled)
+X_test_pca = pca.transform(X_test_scaled)
+
+print(f"Original shape: {X_train_scaled.shape}, Reduced shape: {X_train_pca.shape}")
+
+param_dist = {
+    'alpha': [0.1, 1, 10, 100],
+}
+
+ridge_search = RandomizedSearchCV(
+    estimator=Ridge(),
+    param_distributions=param_dist,
+    n_iter=3,
+    cv=5,
+    n_jobs=-1,
+    verbose=2,
+    random_state=42
+)
+
+lasso_search = RandomizedSearchCV(
+    estimator=Lasso(),
+    param_distributions=param_dist,
+    n_iter=3,
+    cv=5,
+    n_jobs=-1,
+    verbose=2,
+    random_state=42
+)
+
+print("Training Ridge model...")
+start_time = time.time()
+ridge_search.fit(X_train_pca, y_train)
+ridge_training_time = time.time() - start_time
+print(f"Ridge training took {ridge_training_time:.4f} seconds")
+print(f"Best Ridge parameters: {ridge_search.best_params_}")
+
+ridge_cv_scores = cross_val_score(ridge_search.best_estimator_, X_train_pca, y_train, cv=5, scoring='r2')
+print(f"Ridge cross-validation R² scores: {ridge_cv_scores}")
+print(f"Ridge average R² score from cross-validation: {ridge_cv_scores.mean():.4f}")
+
+y_pred_ridge = ridge_search.best_estimator_.predict(X_test_pca)
+ridge_r2 = r2_score(y_test, y_pred_ridge)
+print(f"Ridge test R² score: {ridge_r2:.4f}")
+
+print("Training Lasso model...")
+start_time = time.time()
+lasso_search.fit(X_train_pca, y_train)
+lasso_training_time = time.time() - start_time
+print(f"Lasso training took {lasso_training_time:.4f} seconds")
+print(f"Best Lasso parameters: {lasso_search.best_params_}")
+
+lasso_cv_scores = cross_val_score(lasso_search.best_estimator_, X_train_pca, y_train, cv=5, scoring='r2')
+print(f"Lasso cross-validation R² scores: {lasso_cv_scores}")
+print(f"Lasso average R² score from cross-validation: {lasso_cv_scores.mean():.4f}")
+
+y_pred_lasso = lasso_search.best_estimator_.predict(X_test_pca)
+lasso_r2 = r2_score(y_test, y_pred_lasso)
+print(f"Lasso test R² score: {lasso_r2:.4f}")
