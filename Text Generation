@@ -1,0 +1,107 @@
+import random
+import re
+from collections import defaultdict, Counter
+import nltk
+from nltk.tokenize import sent_tokenize
+
+def load_corpus(file_path: str) -> str:
+    try:
+        print(f"Loading file {file_path}...")
+        with open(file_path, 'r', encoding='utf-8') as file:
+            text = file.read()
+            print(f"Loaded corpus with {len(text)} characters.")
+            return text.lower()  
+    except FileNotFoundError:
+        print(f"Error: File '{file_path}' not found!")
+        return ""
+    except Exception as e:
+        print(f"Error loading file: {e}")
+        return ""
+
+def clean_text(text: str) -> str:
+    print("Cleaning the text...")
+    text = re.sub(r'[^a-z\s\.,;!?]', '', text)
+    print(f"Cleaned text contains {len(text.split())} words.")
+    return text
+
+def generate_transition_matrix(corpus: str, ngram: int = 3, alpha: float = 1.0) -> dict:
+    print(f"Generating transition matrix with {ngram}-grams...")
+    
+    transitions = defaultdict(Counter)
+    words = corpus.split()
+
+    for i in range(len(words) - ngram):
+        current_state = tuple(words[i:i+ngram-1])
+        next_word = words[i+ngram-1]
+        transitions[current_state][next_word] += 1
+
+    vocab_size = len(set(words))
+    for state, next_words in transitions.items():
+        total_count = sum(next_words.values())
+        for next_word in next_words:
+            next_words[next_word] = (next_words[next_word] + alpha) / (total_count + alpha * vocab_size)
+
+    print(f"Generated transition matrix with {len(transitions)} unique states.")
+    return transitions
+
+def generate_text(transitions: dict, prompt: str, ngram: int = 3, length: int = 100) -> str:
+    print("Generating text...")
+    prompt = prompt.lower().strip()
+    prompt_words = prompt.split()
+
+    if len(prompt_words) < (ngram - 1):
+        prompt_words.extend(list(transitions.keys())[0])
+
+    current_state = tuple(prompt_words[-(ngram-1):])
+    generated_words = prompt_words
+    
+    for _ in range(length - len(prompt_words)):
+        if current_state not in transitions:
+            print("No transitions available for the current state.")
+            break
+
+        next_word = random.choices(
+            list(transitions[current_state].keys()),
+            weights=transitions[current_state].values())[0]
+        
+        generated_words.append(next_word)
+        current_state = tuple(generated_words[-(ngram-1):])
+
+        if next_word in ['.', '!', '?']:
+            if random.random() < 0.5:
+                break
+
+    generated_text = ' '.join(generated_words).capitalize()
+
+    if generated_text[-1] not in ['.', '!', '?']:
+        generated_text += '.'
+
+    return generated_text
+
+def main():
+    file_path = 'shakespeare.txt'
+    corpus = load_corpus(file_path)
+    
+    if not corpus:
+        print("No corpus loaded. Exiting program.")
+        return
+    
+    clean_corpus = clean_text(corpus)
+
+    ngram = 3
+    transitions = generate_transition_matrix(clean_corpus, ngram, alpha=1.0)
+
+    prompt = input("Enter a prompt (e.g., a word or a phrase): ")
+
+    if not prompt.strip():
+        print("Prompt is empty. Exiting program.")
+        return
+
+    length = 100
+    generated_text = generate_text(transitions, prompt, ngram, length)
+    
+    print("\nGenerated Text:")
+    print(generated_text)
+
+if __name__ == "__main__":
+    main()
